@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Melody Analysis with Note Count and FFT</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; }
+        #controls { margin: 20px 0; }
+        #tableContainer {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 90%;
+            margin: 20px auto;
+        }
+        #resultsTable {
+            border-collapse: collapse;
+            margin: 5px;
+        }
+        #resultsTable th, #resultsTable td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: center;
+        }
+        #resultsTable th {
+            background-color: #f4f4f4;
+        }
+        canvas {
+            border: 1px solid #ccc;
+            margin-top: 20px;
+            width: 90%;
+        }
+        .large-slider {
+            width: 500px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-time Melody Analysis with Note Count and FFT</h1>
+    <div id="controls">
+        <input type="file" id="audioFile" accept=".wav">
+        <br><br>
+        <label>
+            Magnitude Threshold:
+            <input type="range" id="magnitudeThresholdSlider" min="-100" max="0" value="-50" step="1" oninput="updateMagnitudeThreshold()">
+            <span id="magnitudeThresholdLabel">-50 dB</span>
+        </label>
+        <br><br>
+        <label>
+            Tolerance (%):
+            <input type="range" id="toleranceSlider" min="0" max="10" value="2" step="0.1" oninput="updateTolerance()">
+            <span id="toleranceLabel">2%</span>
+        </label>
+        <br><br>
+        <label>
+            Timeout Duration (ms):
+            <input type="number" id="timeoutDurationInput" min="0" value="100" oninput="updateTimeoutDuration()">
+        </label>
+        <br><br>
+        <label>
+            High-pass Filter Cutoff (Hz):
+            <input type="range" id="highPassCutoffSlider" class="large-slider" min="0" max="20000" value="0" step="10" oninput="updateHighPassCutoff()">
+            <span id="highPassCutoffLabel">0 Hz</span>
+        </label>
+        <br><br>
+        <label>
+            Low-pass Filter Cutoff (Hz):
+            <input type="range" id="lowPassCutoffSlider" class="large-slider" min="0" max="20000" value="20000" step="10" oninput="updateLowPassCutoff()">
+            <span id="lowPassCutoffLabel">20000 Hz</span>
+        </label>
+        <br><br>
+        <button onclick="startAnalysis()">Start Analysis</button>
+        <button onclick="stopAnalysis()">Stop Analysis</button>
+        <button onclick="toggleScale()">Toggle X-axis Scale (Linear/Log)</button>
+    </div>
+
+    <div id="tableContainer">
+        <table id="resultsTable">
+            <thead>
+                <tr id="noteRow"></tr>
+                <tr id="frequencyRow"></tr>
+                <tr id="countRow"></tr>
+            </thead>
+        </table>
+    </div>
+
+    <div id="keyScaleOutput">Detected Key and Scale: <span id="keyScale"></span></div>
+
+    <canvas id="fftCanvas" height="300"></canvas>
+    <canvas id="noteBarCanvas" height="100"></canvas>
+
+    <script>
+        let audioContext, analyser, source, animationId;
+        let highPassFilter, lowPassFilter;
+        let noteCounts = {};
+        let magnitudeThreshold = -50;
+        let tolerance = 0.02;
+        let timeoutDuration = 100;
+        let notesInRange = [];
+        let isAnalyzing = false;
+        let useLogScale = false; // Variable to toggle X-axis scale
+
+        const minFreq = 20;
+        const maxFreq = 20000;
+        const numBins = 32768;
+
+        function generateNotesInRange(minFreq, maxFreq) {
+            const notes = [];
+            const baseFrequency = 440;
+            const semitoneRatio = Math.pow(2, 1 / 12);
+            const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+            let frequency = baseFrequency;
+            let octave = 4;
+
+            while (frequency / 2 >= minFreq) {
+                frequency /= 2;
+                octave--;
+            }
+
+            while (frequency <= maxFreq) {
+                for (let i = 0; i < 12; i++) {
+                    if (frequency >= minFreq && frequency <= maxFreq) {
+                        const noteName = noteNames[i] + octave;
+                        notes.push({ note: noteName, frequency: frequency });
+                    }
+                    frequency *= semitoneRatio;
+                }
+                octave++;
+            }
+            return notes;
+        }
+
+        function updateMagnitudeThreshold() {
+            const slider = document.getElementById("magnitudeThresholdSlider");
+            magnitudeThreshold = parseFloat(slider.value);
+            document.getElementById("magnitudeThresholdLabel").textContent = `${magnitudeThreshold} dB`;
+        }
+
+        function updateTolerance() {
+            const slider = document.getElementById("toleranceSlider");
+            tolerance = parseFloat(slider.value) / 100;
+            document.getElementById("toleranceLabel").textContent = `${slider.value}%`;
+        }
+
+        function updateTimeoutDuration() {
+            timeoutDuration = parseInt(document.getElementById("timeoutDurationInput").value);
+        }
+
+        function updateHighPassCutoff() {
+            const slider = document.getElementById("highPassCutoffSlider");
+            const cutoffFrequency = parseFloat(slider.value);
+            document.getElementById("highPassCutoffLabel").textContent = `${cutoffFrequency} Hz`;
+            if (highPassFilter) {
+                if (cutoffFrequency <= 0) {
+                    // Bypass the filter by setting it to 'allpass'
+                    highPassFilter.type = "allpass";
+                } else {
+                    highPassFilter.type = "highpass";
+                    highPassFilter.frequency.value = cutoffFrequency;
+                }
+            }
+        }
+
+        function updateLowPassCutoff() {
+            const slider = document.getElementById("lowPassCutoffSlider");
+            const cutoffFrequency = parseFloat(slider.value);
+            document.getElementById("lowPassCutoffLabel").textContent = `${cutoffFrequency} Hz`;
+            if (lowPassFilter) {
+                if (cutoffFrequency <= 0 || cutoffFrequency >= 20000) {
+                    // Bypass the filter by setting it to 'allpass'
+                    lowPassFilter.type = "allpass";
+                } else {
+                    lowPassFilter.type = "lowpass";
+                    lowPassFilter.frequency.value = cutoffFrequency;
+                }
+            }
+        }
+
+        function resizeCanvas() {
+            const fftCanvas = document.getElementById('fftCanvas');
+            const noteBarCanvas = document.getElementById('noteBarCanvas');
+            fftCanvas.width = window.innerWidth * 0.9;
+            fftCanvas.height = window.innerHeight * 0.3;
+            noteBarCanvas.width = fftCanvas.width;
+        }
+
+        window.onresize = resizeCanvas;
+
+        function toggleScale() {
+            useLogScale = !useLogScale;
+            draw(); // Redraw the canvas with the new scale
+        }
+
+        async function startAnalysis() {
+            const audioFileInput = document.getElementById('audioFile');
+            const fftCanvas = document.getElementById('fftCanvas');
+            const noteBarCanvas = document.getElementById('noteBarCanvas');
+            const fftCtx = fftCanvas.getContext('2d');
+            const noteBarCtx = noteBarCanvas.getContext('2d');
+
+            resizeCanvas();
+
+            if (audioFileInput.files.length === 0) {
+                alert("Please select a WAV file.");
+                return;
+            }
+
+            if (audioContext) {
+                audioContext.close();
+                cancelAnimationFrame(animationId);
+            }
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const audioData = await audioFileInput.files[0].arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(audioData);
+
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 32768;
+            analyser.smoothingTimeConstant = 0.85;
+            analyser.minDecibels = -90;
+            analyser.maxDecibels = -10;
+
+            const sampleRate = audioContext.sampleRate;
+            const nyquist = sampleRate / 2;
+
+            // Create high-pass filter
+            highPassFilter = audioContext.createBiquadFilter();
+            const highPassCutoff = parseFloat(document.getElementById("highPassCutoffSlider").value);
+            if (highPassCutoff <= 0) {
+                highPassFilter.type = "allpass";
+            } else {
+                highPassFilter.type = "highpass";
+                highPassFilter.frequency.value = highPassCutoff;
+            }
+
+            // Create low-pass filter
+            lowPassFilter = audioContext.createBiquadFilter();
+            const lowPassCutoff = parseFloat(document.getElementById("lowPassCutoffSlider").value);
+            if (lowPassCutoff <= 0 || lowPassCutoff >= 20000) {
+                lowPassFilter.type = "allpass";
+            } else {
+                lowPassFilter.type = "lowpass";
+                lowPassFilter.frequency.value = lowPassCutoff;
+            }
+
+            source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+
+            // Connect nodes: source -> high-pass -> low-pass -> analyser -> destination
+            source.connect(highPassFilter);
+            highPassFilter.connect(lowPassFilter);
+            lowPassFilter.connect(analyser);
+            analyser.connect(audioContext.destination);
+
+            source.start();
+            isAnalyzing = true;
+
+            notesInRange = generateNotesInRange(minFreq, maxFreq);
+            noteCounts = {};
+
+            const frequencyData = new Float32Array(analyser.frequencyBinCount);
+
+            function getNoteFromFrequency(frequency) {
+                let closestNote = null;
+                let closestDistance = Infinity;
+
+                for (const note of notesInRange) {
+                    const distance = Math.abs(frequency - note.frequency);
+                    const withinTolerance = distance / note.frequency <= tolerance;
+
+                    if (withinTolerance && distance < closestDistance) {
+                        closestNote = note;
+                        closestDistance = distance;
+                    }
+                }
+
+                return closestNote;
+            }
+
+            function initializeTable() {
+                const noteRow = document.getElementById('noteRow');
+                const frequencyRow = document.getElementById('frequencyRow');
+                const countRow = document.getElementById('countRow');
+                noteRow.innerHTML = '';
+                frequencyRow.innerHTML = '';
+                countRow.innerHTML = '';
+            }
+
+            function updateTable() {
+                const noteRow = document.getElementById('noteRow');
+                const frequencyRow = document.getElementById('frequencyRow');
+                const countRow = document.getElementById('countRow');
+
+                noteRow.innerHTML = '';
+                frequencyRow.innerHTML = '';
+                countRow.innerHTML = '';
+
+                for (const note in noteCounts) {
+                    if (noteCounts[note] > 0) {
+                        const noteData = notesInRange.find(n => n.note === note);
+                        
+                        const noteHeader = document.createElement('th');
+                        noteHeader.textContent = note;
+                        noteRow.appendChild(noteHeader);
+
+                        const frequencyCell = document.createElement('td');
+                        frequencyCell.textContent = Math.round(noteData.frequency);
+                        frequencyRow.appendChild(frequencyCell);
+
+                        const countCell = document.createElement('td');
+                        countCell.textContent = noteCounts[note];
+                        countRow.appendChild(countCell);
+                    }
+                }
+            }
+
+            function draw() {
+                fftCtx.clearRect(0, 0, fftCanvas.width, fftCanvas.height);
+                noteBarCtx.clearRect(0, 0, noteBarCanvas.width, noteBarCanvas.height);
+                analyser.getFloatFrequencyData(frequencyData);
+
+                const recentNotes = new Set();
+
+                for (let i = 0; i < frequencyData.length; i++) {
+                    const frequency = (i * sampleRate) / analyser.fftSize;
+                    const magnitude = frequencyData[i];
+
+                    if (frequency >= minFreq && frequency <= maxFreq && magnitude > magnitudeThreshold) {
+                        const note = getNoteFromFrequency(frequency);
+
+                        if (note && !recentNotes.has(note.note)) {
+                            recentNotes.add(note.note);
+                            setTimeout(() => recentNotes.delete(note.note), timeoutDuration);
+
+                            if (!noteCounts[note.note]) noteCounts[note.note] = 0;
+                            noteCounts[note.note]++;
+                        }
+                    }
+                }
+                updateTable();
+
+                function getXPosition(frequency) {
+                    if (useLogScale) {
+                        const logMin = Math.log10(minFreq);
+                        const logMax = Math.log10(nyquist);
+                        return ((Math.log10(frequency) - logMin) / (logMax - logMin)) * fftCanvas.width;
+                    } else {
+                        return (frequency / nyquist) * fftCanvas.width;
+                    }
+                }
+
+                // Draw FFT data
+                fftCtx.beginPath();
+                fftCtx.moveTo(0, fftCanvas.height);
+                for (let i = 0; i < frequencyData.length; i++) {
+                    const frequency = (i * sampleRate) / analyser.fftSize;
+                    const magnitude = frequencyData[i];
+                    const x = getXPosition(frequency);
+                    const y = fftCanvas.height - ((magnitude + 90) / 80) * fftCanvas.height;
+                    fftCtx.lineTo(x, y);
+                }
+                fftCtx.stroke();
+
+                // Draw the magnitude threshold line
+                const thresholdY = fftCanvas.height - ((magnitudeThreshold + 90) / 80) * fftCanvas.height;
+                fftCtx.strokeStyle = 'red';
+                fftCtx.beginPath();
+                fftCtx.moveTo(0, thresholdY);
+                fftCtx.lineTo(fftCanvas.width, thresholdY);
+                fftCtx.stroke();
+                fftCtx.strokeStyle = 'black';
+
+                // Draw frequency labels on the X-axis
+                const numLabels = 10;
+                for (let i = 0; i <= numLabels; i++) {
+                    const freq = useLogScale ? Math.pow(10, Math.log10(minFreq) + (i / numLabels) * (Math.log10(nyquist) - Math.log10(minFreq))) : (i / numLabels) * nyquist;
+                    const x = getXPosition(freq);
+                    fftCtx.fillText(`${Math.round(freq)} Hz`, x, fftCanvas.height - 5);
+                    noteBarCtx.fillText(`${Math.round(freq)} Hz`, x, noteBarCanvas.height - 5);
+                }
+
+                // Draw Y-axis labels and grid on noteBarCanvas
+                const maxNoteCount = Math.max(...Object.values(noteCounts), 1);
+                const numYLabels = 5;
+                for (let i = 0; i <= numYLabels; i++) {
+                    const yValue = (i / numYLabels) * maxNoteCount;
+                    const y = noteBarCanvas.height - (yValue / maxNoteCount) * noteBarCanvas.height;
+                    noteBarCtx.fillText(`${Math.round(yValue)}`, 5, y);
+                    noteBarCtx.beginPath();
+                    noteBarCtx.moveTo(0, y);
+                    noteBarCtx.lineTo(noteBarCanvas.width, y);
+                    noteBarCtx.strokeStyle = '#ccc';
+                    noteBarCtx.stroke();
+                }
+
+                // Draw bar chart for detected notes
+                for (const note in noteCounts) {
+                    const noteData = notesInRange.find(n => n.note === note);
+                    if (noteData && noteCounts[note] > 0) {
+                        const x = getXPosition(noteData.frequency);
+                        const barHeight = Math.min(noteCounts[note] / maxNoteCount * noteBarCanvas.height, noteBarCanvas.height);
+                        noteBarCtx.fillStyle = 'blue';
+                        noteBarCtx.fillRect(x, noteBarCanvas.height - barHeight, 5, barHeight);
+                        noteBarCtx.fillText(note, x, noteBarCanvas.height - barHeight - 5);
+                    }
+                }
+
+                if (isAnalyzing) {
+                    animationId = requestAnimationFrame(draw);
+                }
+            }
+
+            initializeTable();
+            draw();
+        }
+
+        function stopAnalysis() {
+            isAnalyzing = false;
+            if (audioContext) {
+                audioContext.close();
+            }
+            cancelAnimationFrame(animationId);
+            detectKeyAndScale();
+        }
+
+        function detectKeyAndScale() {
+            const keys = {
+                "C": ["C", "D", "E", "F", "G", "A", "B"],
+                "G": ["G", "A", "B", "C", "D", "E", "F#"],
+                "D": ["D", "E", "F#", "G", "A", "B", "C#"],
+                "A": ["A", "B", "C#", "D", "E", "F#", "G#"],
+                "E": ["E", "F#", "G#", "A", "B", "C#", "D#"],
+                "B": ["B", "C#", "D#", "E", "F#", "G#", "A#"],
+                "F#": ["F#", "G#", "A#", "B", "C#", "D#", "E#"],
+                "C#": ["C#", "D#", "E#", "F#", "G#", "A#", "B#"],
+                "F": ["F", "G", "A", "A#", "C", "D", "E"],
+                "Bb": ["A#", "C", "D", "D#", "F", "G", "A"],
+                "Eb": ["D#", "F", "G", "G#", "A#", "C", "D"],
+                "Ab": ["G#", "A#", "C", "C#", "D#", "F", "G"],
+                "Db": ["C#", "D#", "F", "F#", "G#", "A#", "C"],
+                "Gb": ["F#", "G#", "A#", "B", "C#", "D#", "E"],
+                "Cb": ["B", "D#", "E", "F", "F#", "G#", "A"]
+            };
+
+            let detectedKey = "";
+            let maxMatches = 0;
+
+            for (const [key, notes] of Object.entries(keys)) {
+                let matches = 0;
+                for (const note of notes) {
+                    if (noteCounts[note] > 0) {
+                        matches += noteCounts[note];
+                    }
+                }
+                if (matches > maxMatches) {
+                    maxMatches = matches;
+                    detectedKey = key;
+                }
+            }
+
+            const keyScaleElement = document.getElementById("keyScale");
+            keyScaleElement.textContent = detectedKey ? `${detectedKey} Major` : "Key not detected";
+        }
+
+        window.onload = resizeCanvas;
+    </script>
+</body>
+</html>
