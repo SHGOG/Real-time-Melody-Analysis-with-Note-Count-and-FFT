@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Real-time Melody Analysis with Note Count and FFT</title>
+    <style>
+        /* スタイルシート */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(to bottom right, #1e3c72, #2a5298);
+            color: #fff;
+        }
+        h1 {
+            background-color: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            padding: 20px 0;
+            margin: 0;
+            font-size: 2em;
+            text-shadow: 1px 1px 2px #000;
+        }
+        #controls {
+            margin: 20px 0;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #controls label {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: #fff;
+        }
+        #controls input[type="file"],
+        #controls input[type="range"],
+        #controls input[type="number"],
+        #controls button {
+            margin-top: 5px;
+            padding: 5px;
+            border: none;
+            border-radius: 5px;
+        }
+        #controls button {
+            background: #4caf50;
+            color: #fff;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        #controls button:hover {
+            background: #45a049;
+        }
+        #tableContainer {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 90%;
+            margin: 20px auto;
+            overflow-x: auto;
+        }
+        #resultsTable {
+            border-collapse: collapse;
+            margin: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            color: #fff;
+            min-width: 600px;
+        }
+        #resultsTable th, #resultsTable td {
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 8px;
+            text-align: center;
+        }
+        #resultsTable th {
+            background-color: rgba(0, 0, 0, 0.3);
+        }
+        .canvas-container {
+            position: relative;
+            width: 90%;
+            margin: 20px auto;
+            background: rgba(255, 255, 255, 0.1);
+            padding-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        canvas {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            width: 100%;
+        }
+        .canvas-labels {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 20px;
+        }
+        .canvas-labels span {
+            position: absolute;
+            bottom: 0;
+            transform: translateX(-50%);
+            font-size: 12px;
+            white-space: nowrap;
+            color: #fff;
+        }
+        #keyScaleOutput {
+            margin: 20px 0;
+            font-size: 1.5em;
+            text-shadow: 1px 1px 2px #000;
+        }
+        #instructions {
+            width: 90%;
+            margin: 40px auto;
+            text-align: left;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            box-sizing: border-box;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            color: #fff;
+        }
+        #instructions h2 {
+            margin-top: 0;
+            color: #fff;
+        }
+        #instructions p, #instructions li {
+            color: #fff;
+        }
+        #progressContainer {
+            margin: 20px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #progressBar {
+            width: 80%;
+        }
+        #currentTime, #duration {
+            margin: 0 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-time Melody Analysis with Note Count and FFT</h1>
+    <div id="controls">
+        <label>
+            Select Audio File:
+            <input type="file" id="audioFile" accept=".wav,.aiff,.mp3,.mp4,audio/*">
+        </label>
+        <label>
+            Magnitude Threshold:
+            <input type="range" id="magnitudeThresholdSlider" min="-100" max="0" value="-50" step="1" oninput="updateMagnitudeThreshold()">
+            <span id="magnitudeThresholdLabel">-50 dB</span>
+        </label>
+        <label>
+            Tolerance (%):
+            <input type="range" id="toleranceSlider" min="0" max="10" value="2" step="0.1" oninput="updateTolerance()">
+            <span id="toleranceLabel">2%</span>
+        </label>
+        <label>
+            Timeout Duration (ms):
+            <input type="number" id="timeoutDurationInput" min="0" value="100" oninput="updateTimeoutDuration()">
+        </label>
+        <!-- ハイパスフィルターのスライダー -->
+        <label>
+            High-pass Filter Cutoff (Hz):
+            <input type="range" id="highpassSlider" min="20" max="24000" value="400" step="1" oninput="updateHighpassFrequency()">
+            <span id="highpassLabel">400 Hz</span>
+        </label>
+        <!-- ローパスフィルターのスライダー -->
+        <label>
+            Low-pass Filter Cutoff (Hz):
+            <input type="range" id="lowpassSlider" min="20" max="24000" value="20000" step="1" oninput="updateLowpassFrequency()">
+            <span id="lowpassLabel">20000 Hz</span>
+        </label>
+        <button onclick="startAnalysis()">Start Analysis</button>
+        <button onclick="stopAnalysis()">Stop Analysis</button>
+        <button onclick="toggleScale()">Toggle X-axis Scale (Linear/Log)</button>
+    </div>
+
+    <div id="progressContainer">
+        <span id="currentTime">0:00</span>
+        <input type="range" id="progressBar" min="0" max="100" value="0" step="0.1" onchange="seekAudio()">
+        <span id="duration">0:00</span>
+    </div>
+
+    <div id="tableContainer">
+        <table id="resultsTable">
+            <thead>
+                <tr id="noteRow">
+                    <th>Note</th>
+                    <!-- ノート名がここに追加されます -->
+                </tr>
+            </thead>
+            <tbody>
+                <tr id="frequencyRow">
+                    <td>Frequency (Hz)</td>
+                    <!-- 周波数がここに追加されます -->
+                </tr>
+                <tr id="countRow">
+                    <td>Count</td>
+                    <!-- カウントがここに追加されます -->
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="keyScaleOutput">Detected Key and Scale: <span id="keyScale"></span></div>
+
+    <div class="canvas-container">
+        <canvas id="fftCanvas" height="300"></canvas>
+        <div id="fftLabels" class="canvas-labels"></div>
+    </div>
+    <div class="canvas-container">
+        <canvas id="noteBarCanvas" height="150"></canvas>
+        <div id="noteBarLabels" class="canvas-labels"></div>
+    </div>
+
+    <div id="instructions">
+        <h2>How to Use</h2>
+        <ol>
+            <li><strong>Select an Audio File:</strong> Click on the "Select Audio File" button to upload an audio file (WAV, AIFF, MP3, MP4, etc.) for analysis.</li>
+            <li><strong>Adjust Settings:</strong> Use the sliders and input fields to adjust the magnitude threshold, tolerance, timeout duration, and high-pass and low-pass filter cutoff frequencies.</li>
+            <li><strong>Start Analysis:</strong> Click the "Start Analysis" button to begin processing the audio file.</li>
+            <li><strong>Use the Progress Bar:</strong> Move the slider to seek to a different position in the audio playback.</li>
+            <li><strong>View Results:</strong> Observe the FFT graph, note counts, and detected key and scale, which update in real-time. The filter ranges are visualized on the FFT graph.</li>
+            <li><strong>Toggle X-axis Scale:</strong> Use the "Toggle X-axis Scale" button to switch between linear and logarithmic frequency scales.</li>
+            <li><strong>Stop Analysis:</strong> Click the "Stop Analysis" button to end the analysis.</li>
+        </ol>
+        <p>Adjust the settings to refine the analysis based on your preferences. The magnitude threshold controls the minimum decibel level for note detection, while the tolerance adjusts how close a frequency must be to a note's frequency to be considered a match. The high-pass and low-pass filters help to eliminate frequencies that may not be relevant to your analysis. The filter ranges are visualized on the FFT graph for better understanding.</p>
+    </div>
+
+    <!-- Audio要素を追加 -->
+    <audio id="audioElement" controls style="display:none;"></audio>
+
+    <script>
+        // JavaScriptコード（変更点を含む）
+
+        let audioContext, analyser, source, animationId;
+        let noteCounts = {};
+        let magnitudeThreshold = -50;
+        let tolerance = 0.02;
+        let timeoutDuration = 100;
+        let notesInRange = [];
+        let isAnalyzing = false;
+        let useLogScale = true; // 初期値をtrueに設定
+
+        let minFreq = 20; // Minimum Frequency を20Hzに固定
+        let maxFreq = 24000; // 最大周波数を24000Hzに設定
+        let sampleRate, nyquist;
+
+        let startTime = 0;
+        let pausedAt = 0;
+        let progressBar = document.getElementById('progressBar');
+        let currentTimeDisplay = document.getElementById('currentTime');
+        let durationDisplay = document.getElementById('duration');
+
+        // ハイパスフィルター用の変数
+        let highpassFilter;
+        let highpassFrequency = 400; // 初期値を400Hzに設定
+
+        // ローパスフィルター用の変数
+        let lowpassFilter;
+        let lowpassFrequency = 20000; // 初期値を20000Hzに設定
+
+        const audioFileInput = document.getElementById('audioFile');
+        const audioElement = document.getElementById('audioElement');
+
+        // ファイル選択時にAudio要素にソースを設定
+        audioFileInput.onchange = function() {
+            const file = audioFileInput.files[0];
+            if (file) {
+                const objectUrl = URL.createObjectURL(file);
+                audioElement.src = objectUrl;
+            }
+        };
+
+        function generateNotesInRange(minFreq, maxFreq) {
+            const notes = [];
+            const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+            const minMidi = Math.ceil(12 * Math.log2(minFreq / 440) + 69);
+            const maxMidi = Math.floor(12 * Math.log2(maxFreq / 440) + 69);
+
+            for (let midi = minMidi; midi <= maxMidi; midi++) {
+                const frequency = 440 * Math.pow(2, (midi - 69) / 12);
+                const noteIndex = midi % 12;
+                const octave = Math.floor(midi / 12) - 1;
+                const noteName = noteNames[noteIndex] + octave;
+                notes.push({ note: noteName, frequency: frequency });
+            }
+            return notes;
+        }
+
+        function updateMagnitudeThreshold() {
+            const slider = document.getElementById("magnitudeThresholdSlider");
+            magnitudeThreshold = parseFloat(slider.value);
+            document.getElementById("magnitudeThresholdLabel").textContent = `${magnitudeThreshold} dB`;
+        }
+
+        function updateTolerance() {
+            const slider = document.getElementById("toleranceSlider");
+            tolerance = parseFloat(slider.value) / 100;
+            document.getElementById("toleranceLabel").textContent = `${slider.value}%`;
+        }
+
+        function updateTimeoutDuration() {
+            timeoutDuration = parseInt(document.getElementById("timeoutDurationInput").value);
+        }
+
+        // ハイパスフィルターのカットオフ周波数を更新
+        function updateHighpassFrequency() {
+            const slider = document.getElementById("highpassSlider");
+            highpassFrequency = parseFloat(slider.value);
+            document.getElementById("highpassLabel").textContent = `${highpassFrequency} Hz`;
+            if (highpassFilter) {
+                highpassFilter.frequency.setValueAtTime(highpassFrequency, audioContext.currentTime);
+            }
+        }
+
+        // ローパスフィルターのカットオフ周波数を更新
+        function updateLowpassFrequency() {
+            const slider = document.getElementById("lowpassSlider");
+            lowpassFrequency = parseFloat(slider.value);
+            document.getElementById("lowpassLabel").textContent = `${lowpassFrequency} Hz`;
+            if (lowpassFilter) {
+                lowpassFilter.frequency.setValueAtTime(lowpassFrequency, audioContext.currentTime);
+            }
+        }
+
+        function resizeCanvas() {
+            const fftCanvas = document.getElementById('fftCanvas');
+            const noteBarCanvas = document.getElementById('noteBarCanvas');
+            fftCanvas.width = window.innerWidth * 0.9;
+            fftCanvas.height = window.innerHeight * 0.3;
+            noteBarCanvas.width = fftCanvas.width;
+        }
+
+        window.onresize = resizeCanvas;
+
+        function toggleScale() {
+            useLogScale = !useLogScale;
+            draw();
+        }
+
+        function seekAudio() {
+            if (!audioElement) return;
+            const seekTime = (progressBar.value / 100) * audioElement.duration;
+            audioElement.currentTime = seekTime;
+        }
+
+        async function startAnalysis() {
+            const fftCanvas = document.getElementById('fftCanvas');
+            const noteBarCanvas = document.getElementById('noteBarCanvas');
+            const fftCtx = fftCanvas.getContext('2d');
+            const noteBarCtx = noteBarCanvas.getContext('2d');
+
+            resizeCanvas();
+
+            if (audioFileInput.files.length === 0) {
+                alert("オーディオファイルを選択してください。");
+                return;
+            }
+
+            if (audioContext) {
+                audioContext.close();
+                cancelAnimationFrame(animationId);
+            }
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 32768;
+            analyser.smoothingTimeConstant = 0.85;
+            analyser.minDecibels = -90;
+            analyser.maxDecibels = -10;
+
+            sampleRate = audioContext.sampleRate;
+            nyquist = sampleRate / 2;
+
+            // スライダーの最大値をナイキスト周波数に設定
+            document.getElementById('highpassSlider').max = nyquist;
+            document.getElementById('lowpassSlider').max = nyquist;
+
+            isAnalyzing = true;
+
+            notesInRange = generateNotesInRange(minFreq, nyquist);
+            noteCounts = {};
+            startTime = 0;
+            pausedAt = 0;
+
+            // ハイパスフィルターを作成
+            highpassFilter = audioContext.createBiquadFilter();
+            highpassFilter.type = 'highpass';
+            highpassFilter.frequency.setValueAtTime(highpassFrequency, audioContext.currentTime);
+
+            // ローパスフィルターを作成
+            lowpassFilter = audioContext.createBiquadFilter();
+            lowpassFilter.type = 'lowpass';
+            lowpassFilter.frequency.setValueAtTime(lowpassFrequency, audioContext.currentTime);
+
+            // 音源を接続
+            source = audioContext.createMediaElementSource(audioElement);
+            source.connect(highpassFilter);
+            highpassFilter.connect(lowpassFilter);
+            lowpassFilter.connect(analyser);
+            analyser.connect(audioContext.destination);
+
+            // エラーハンドリング
+            audioElement.onerror = function() {
+                alert('このオーディオ形式はサポートされていません。別のファイルを選択してください。');
+                stopAnalysis();
+                return;
+            };
+
+            // 再生位置の表示を更新
+            audioElement.onloadedmetadata = function() {
+                durationDisplay.textContent = formatTime(audioElement.duration);
+            };
+
+            // 再生を開始
+            audioElement.play();
+
+            const frequencyData = new Float32Array(analyser.frequencyBinCount);
+
+            function getNoteFromFrequency(frequency) {
+                let closestNote = null;
+                let minDistance = Infinity;
+
+                for (const note of notesInRange) {
+                    const distance = Math.abs(frequency - note.frequency);
+                    if (distance / note.frequency <= tolerance && distance < minDistance) {
+                        closestNote = note;
+                        minDistance = distance;
+                    }
+                }
+
+                return closestNote;
+            }
+
+            function initializeTable() {
+                const noteRow = document.getElementById('noteRow');
+                const frequencyRow = document.getElementById('frequencyRow');
+                const countRow = document.getElementById('countRow');
+
+                noteRow.innerHTML = '<th>Note</th>';
+                frequencyRow.innerHTML = '<td>Frequency (Hz)</td>';
+                countRow.innerHTML = '<td>Count</td>';
+            }
+
+            function updateTable() {
+                const noteRow = document.getElementById('noteRow');
+                const frequencyRow = document.getElementById('frequencyRow');
+                const countRow = document.getElementById('countRow');
+
+                // 既存のセルをクリア（最初のセル以外）
+                noteRow.innerHTML = '<th>Note</th>';
+                frequencyRow.innerHTML = '<td>Frequency (Hz)</td>';
+                countRow.innerHTML = '<td>Count</td>';
+
+                for (const note in noteCounts) {
+                    if (noteCounts[note] > 0) {
+                        const noteData = notesInRange.find(n => n.note === note);
+
+                        const noteHeader = document.createElement('th');
+                        noteHeader.textContent = note;
+                        noteRow.appendChild(noteHeader);
+
+                        const frequencyCell = document.createElement('td');
+                        frequencyCell.textContent = Math.round(noteData.frequency);
+                        frequencyRow.appendChild(frequencyCell);
+
+                        const countCell = document.createElement('td');
+                        countCell.textContent = noteCounts[note];
+                        countRow.appendChild(countCell);
+                    }
+                }
+            }
+
+            function formatTime(seconds) {
+                const minutes = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${minutes}:${secs.toString().padStart(2, '0')}`;
+            }
+
+            function draw() {
+                if (!isAnalyzing) return;
+
+                fftCtx.clearRect(0, 0, fftCanvas.width, fftCanvas.height);
+                noteBarCtx.clearRect(0, 0, noteBarCanvas.width, noteBarCanvas.height);
+                analyser.getFloatFrequencyData(frequencyData);
+
+                const recentNotes = new Set();
+
+                for (let i = 0; i < frequencyData.length; i++) {
+                    const frequency = (i * sampleRate) / analyser.fftSize;
+                    const magnitude = frequencyData[i];
+
+                    if (frequency >= minFreq && frequency <= nyquist && magnitude > magnitudeThreshold) {
+                        const note = getNoteFromFrequency(frequency);
+
+                        if (note && !recentNotes.has(note.note)) {
+                            recentNotes.add(note.note);
+                            setTimeout(() => recentNotes.delete(note.note), timeoutDuration);
+
+                            if (!noteCounts[note.note]) noteCounts[note.note] = 0;
+                            noteCounts[note.note]++;
+                        }
+                    }
+                }
+                updateTable();
+                detectKeyAndScale(); // リアルタイムでキーを検出
+
+                function getXPosition(frequency) {
+                    if (useLogScale) {
+                        const logMin = Math.log10(minFreq);
+                        const logMax = Math.log10(nyquist);
+                        return ((Math.log10(frequency) - logMin) / (logMax - logMin)) * fftCanvas.width;
+                    } else {
+                        return ((frequency - minFreq) / (nyquist - minFreq)) * fftCanvas.width;
+                    }
+                }
+
+                // Draw FFT data
+                fftCtx.beginPath();
+                fftCtx.moveTo(0, fftCanvas.height);
+                fftCtx.strokeStyle = '#fff';
+                for (let i = 0; i < frequencyData.length; i++) {
+                    const frequency = (i * sampleRate) / analyser.fftSize;
+                    if (frequency < minFreq) continue;
+                    const magnitude = frequencyData[i];
+                    const x = getXPosition(frequency);
+                    const y = fftCanvas.height - ((magnitude + 90) / 80) * fftCanvas.height;
+                    fftCtx.lineTo(x, y);
+                }
+                fftCtx.stroke();
+
+                // Draw the magnitude threshold line
+                const thresholdY = fftCanvas.height - ((magnitudeThreshold + 90) / 80) * fftCanvas.height;
+                fftCtx.strokeStyle = 'red';
+                fftCtx.beginPath();
+                fftCtx.moveTo(0, thresholdY);
+                fftCtx.lineTo(fftCanvas.width, thresholdY);
+                fftCtx.stroke();
+                fftCtx.strokeStyle = '#fff';
+
+                // フィルター範囲の描画
+                const filterGradient = fftCtx.createLinearGradient(0, 0, fftCanvas.width, 0);
+                const gradientSteps = 100;
+
+                for (let i = 0; i <= gradientSteps; i++) {
+                    const position = i / gradientSteps;
+                    let frequency;
+
+                    if (useLogScale) {
+                        const logMin = Math.log10(minFreq);
+                        const logMax = Math.log10(nyquist);
+                        const logFreq = logMin + position * (logMax - logMin);
+                        frequency = Math.pow(10, logFreq);
+                    } else {
+                        frequency = minFreq + position * (nyquist - minFreq) * position;
+                    }
+
+                    // Calculate attenuation for highpass filter
+                    let highpassAttenuation = 0;
+                    if (frequency < highpassFrequency) {
+                        highpassAttenuation = 1 - frequency / highpassFrequency;
+                    }
+
+                    // Calculate attenuation for lowpass filter
+                    let lowpassAttenuation = 0;
+                    if (frequency > lowpassFrequency) {
+                        lowpassAttenuation = (frequency - lowpassFrequency) / (nyquist - lowpassFrequency);
+                    }
+
+                    // Total attenuation
+                    const totalAttenuation = Math.max(highpassAttenuation, lowpassAttenuation);
+                    const alpha = Math.min(totalAttenuation * 0.8, 0.8); // 最大不透明度を0.8に設定
+
+                    // Color blending based on attenuation
+                    let color = `rgba(255, 0, 0, ${alpha})`; // 赤色
+
+                    filterGradient.addColorStop(position, color);
+                }
+
+                fftCtx.fillStyle = filterGradient;
+                fftCtx.fillRect(0, 0, fftCanvas.width, fftCanvas.height);
+
+                // 再度FFTデータを上に描画
+                fftCtx.beginPath();
+                fftCtx.moveTo(0, fftCanvas.height);
+                fftCtx.strokeStyle = '#fff';
+                for (let i = 0; i < frequencyData.length; i++) {
+                    const frequency = (i * sampleRate) / analyser.fftSize;
+                    if (frequency < minFreq) continue;
+                    const magnitude = frequencyData[i];
+                    const x = getXPosition(frequency);
+                    const y = fftCanvas.height - ((magnitude + 90) / 80) * fftCanvas.height;
+                    fftCtx.lineTo(x, y);
+                }
+                fftCtx.stroke();
+
+                // Display frequency labels outside the canvas
+                const fftLabelsDiv = document.getElementById('fftLabels');
+                fftLabelsDiv.innerHTML = '';
+                const noteBarLabelsDiv = document.getElementById('noteBarLabels');
+                noteBarLabelsDiv.innerHTML = '';
+
+                const numLabels = 10;
+                for (let i = 0; i <= numLabels; i++) {
+                    const freq = useLogScale
+                        ? Math.pow(10, Math.log10(minFreq) + (i / numLabels) * (Math.log10(nyquist) - Math.log10(minFreq)))
+                        : minFreq + ((i / numLabels) * (nyquist - minFreq));
+                    const x = getXPosition(freq);
+
+                    // Create label elements for FFT canvas
+                    const fftLabel = document.createElement('span');
+                    fftLabel.style.left = `${x}px`;
+                    fftLabel.textContent = `${Math.round(freq)} Hz`;
+                    fftLabelsDiv.appendChild(fftLabel);
+
+                    // Create label elements for Note Bar canvas
+                    const noteBarLabel = document.createElement('span');
+                    noteBarLabel.style.left = `${x}px`;
+                    noteBarLabel.textContent = `${Math.round(freq)} Hz`;
+                    noteBarLabelsDiv.appendChild(noteBarLabel);
+                }
+
+                // Draw bar chart for detected notes
+                const maxNoteCount = Math.max(...Object.values(noteCounts), 1);
+                for (const note in noteCounts) {
+                    const noteData = notesInRange.find(n => n.note === note);
+                    if (noteData && noteCounts[note] > 0) {
+                        const x = getXPosition(noteData.frequency);
+                        const barWidth = 10;
+                        const barHeight = Math.min(noteCounts[note] / maxNoteCount * noteBarCanvas.height, noteBarCanvas.height);
+
+                        // Create gradient for the bar
+                        const gradient = noteBarCtx.createLinearGradient(0, noteBarCanvas.height - barHeight, 0, noteBarCanvas.height);
+                        gradient.addColorStop(0, '#ff7e5f');
+                        gradient.addColorStop(1, '#feb47b');
+                        noteBarCtx.fillStyle = gradient;
+                        noteBarCtx.fillRect(x - barWidth / 2, noteBarCanvas.height - barHeight, barWidth, barHeight);
+
+                        // Adjust text position and color
+                        let textY = noteBarCanvas.height - barHeight - 5;
+                        let textColor = '#fff';
+                        if (textY < 15) {
+                            textY = noteBarCanvas.height - barHeight + 15;
+                        }
+                        noteBarCtx.fillStyle = textColor;
+                        noteBarCtx.font = '12px Arial';
+                        noteBarCtx.textAlign = 'center';
+                        noteBarCtx.fillText(note, x, textY);
+                    }
+                }
+
+                // Update progress bar and time displays
+                const currentTime = audioElement.currentTime;
+                progressBar.value = (currentTime / audioElement.duration) * 100;
+                currentTimeDisplay.textContent = formatTime(currentTime);
+
+                if (currentTime >= audioElement.duration) {
+                    stopAnalysis();
+                } else {
+                    animationId = requestAnimationFrame(draw);
+                }
+            }
+
+            initializeTable();
+            draw();
+        }
+
+        function stopAnalysis() {
+            isAnalyzing = false;
+            if (audioContext) {
+                audioContext.close();
+            }
+            if (audioElement) {
+                audioElement.pause();
+            }
+            cancelAnimationFrame(animationId);
+            // detectKeyAndScale(); // リアルタイムで検出するため、この行は不要
+        }
+
+        function detectKeyAndScale() {
+            // Create chroma vector
+            const chromaVector = Array(12).fill(0);
+            let totalNotes = 0;
+
+            for (const note in noteCounts) {
+                const noteCount = noteCounts[note];
+                const noteName = note.slice(0, -1); // Remove octave number
+                const noteIndex = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"].indexOf(noteName);
+                if (noteIndex >= 0) {
+                    chromaVector[noteIndex] += noteCount;
+                    totalNotes += noteCount;
+                }
+            }
+
+            // Normalize
+            for (let i = 0; i < chromaVector.length; i++) {
+                chromaVector[i] /= totalNotes;
+            }
+
+            // Create key templates
+            const majorKeyTemplates = [];
+            const minorKeyTemplates = [];
+            const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+            for (let i = 0; i < 12; i++) {
+                // Major scale template
+                const majorTemplate = Array(12).fill(0);
+                const majorScaleIntervals = [0, 2, 4, 5, 7, 9, 11];
+                for (const interval of majorScaleIntervals) {
+                    majorTemplate[(i + interval) % 12] = 1 / 7;
+                }
+                majorKeyTemplates.push(majorTemplate);
+
+                // Minor scale template
+                const minorTemplate = Array(12).fill(0);
+                const minorScaleIntervals = [0, 2, 3, 5, 7, 8, 10];
+                for (const interval of minorScaleIntervals) {
+                    minorTemplate[(i + interval) % 12] = 1 / 7;
+                }
+                minorKeyTemplates.push(minorTemplate);
+            }
+
+            // Calculate cosine similarity
+            let maxSimilarity = -1;
+            let detectedKey = '';
+            for (let i = 0; i < 12; i++) {
+                const majorSimilarity = cosineSimilarity(chromaVector, majorKeyTemplates[i]);
+                if (majorSimilarity > maxSimilarity) {
+                    maxSimilarity = majorSimilarity;
+                    detectedKey = noteNames[i] + ' Major';
+                }
+
+                const minorSimilarity = cosineSimilarity(chromaVector, minorKeyTemplates[i]);
+                if (minorSimilarity > maxSimilarity) {
+                    maxSimilarity = minorSimilarity;
+                    detectedKey = noteNames[i] + ' Minor';
+                }
+            }
+
+            const keyScaleElement = document.getElementById("keyScale");
+            keyScaleElement.textContent = detectedKey || "Key not detected";
+        }
+
+        function cosineSimilarity(vecA, vecB) {
+            let dotProduct = 0;
+            let normA = 0;
+            let normB = 0;
+            for (let i = 0; i < vecA.length; i++) {
+                dotProduct += vecA[i] * vecB[i];
+                normA += vecA[i] * vecA[i];
+                normB += vecB[i] * vecB[i];
+            }
+            return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+        }
+
+        window.onload = function() {
+            resizeCanvas();
+            notesInRange = generateNotesInRange(minFreq, maxFreq);
+            updateHighpassFrequency(); // ハイパスフィルターの初期化
+            updateLowpassFrequency(); // ローパスフィルターの初期化
+        };
+    </script>
+</body>
+</html>
