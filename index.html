@@ -164,27 +164,51 @@
 </head>
 <body>
     <h2>リアルタイムメロディ解析とノートカウント、FFT表示</h2>
+    
 
     <div id="controls">
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         <label>
             オーディオファイルを選択:
             <input type="file" id="audioFile" accept=".wav,.aiff,.mp3,.mp4,audio/*">
         </label><button onclick="startAnalysis()">---解析開始---</button>
         <button onclick="stopAnalysis()">---解析停止---</button>
         <button onclick="toggleScale()">X軸スケール切替 (線形/対数)</button>
-    
-        <div id="progressContainer">
+    </div><div id="progressContainer">
         <span id="currentTime">0:07</span>
         <input type="range" id="progressBar" min="0" max="100" value="0" step="0.1" onchange="seekAudio()">
         <span id="duration">3:03</span>
-        </div>
+    </div>
 
+    
+
+    
+
+    <div id="fftSliderContainer">
+            
+        </div><!-- FFTグラフと拡大スライダーのコンテナ -->
     <div>
+        
+        
+        
+        
+        
         <label>
-            ハイパスフィルター
-            <input type="range" id="highpassSlider" min="20" max="24000" value="400" step="1" oninput="updateHighpassFrequency()">
+ハイパスフィルター
+<input type="range" id="highpassSlider" min="20" max="24000" value="400" step="1" oninput="updateHighpassFrequency()">
             <span id="highpassLabel">400 Hz</span>
-            <input type="checkbox" id="highpassEnable" checked="" onchange="updateFilterRouting()"><!-- ローパスフィルターのオン/オフスイッチ --></label>
+        <input type="checkbox" id="highpassEnable" checked="" onchange="updateFilterRouting()"><!-- ローパスフィルターのオン/オフスイッチ --></label>
         
         
         <!-- ローパスフィルターのスライダー -->
@@ -192,16 +216,22 @@
             ローパスフィルター
             <input type="range" id="lowpassSlider" min="20" max="24000" value="20000" step="1" oninput="updateLowpassFrequency()">
             <span id="lowpassLabel">20000 Hz</span>
-            <label><input type="checkbox" id="lowpassEnable" checked="" onchange="updateFilterRouting()"></label>
-        </label>
-      </div>  
+        <label><input type="checkbox" id="lowpassEnable" checked="" onchange="updateFilterRouting()">
+        </label></label>
         
         
         
         
-    <div class="canvas-container" id="fftContainer">
+        
+    <label>
+                FFT拡大率:
+                <input type="range" id="fftMagnificationSlider" min="1" max="10" value="1" step="0.1" oninput="updateFftMagnification()">
+                <span id="fftMagnificationLabel">1x</span>
+            </label></div><div class="canvas-container" id="fftContainer">
         <canvas id="fftCanvas" height="346" width="1555"></canvas>
         <div id="fftLabels" class="canvas-labels"><span style="left: 0px;">20 Hz</span><span style="left: 139.4px;">41 Hz</span><span style="left: 278.8px;">83 Hz</span><span style="left: 418.2px;">168 Hz</span><span style="left: 557.6px;">341 Hz</span><span style="left: 697px;">693 Hz</span><span style="left: 836.4px;">1408 Hz</span><span style="left: 975.8px;">2861 Hz</span><span style="left: 1115.2px;">5813 Hz</span><span style="left: 1254.6px;">11811 Hz</span><span style="left: 1394px;">24000 Hz</span></div>
+        <!-- FFT拡大スライダーを追加 -->
+        
     </div>
 
     <div class="canvas-container">
